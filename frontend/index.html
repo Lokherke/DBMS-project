@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stock Transaction System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<h2>Add Transaction</h2>
+
+<form id="transactionForm">
+    <input id="symbol" placeholder="Stock Symbol" required>
+
+    <select id="type" required>
+        <option value="BUY">BUY</option>
+        <option value="SELL">SELL</option>
+    </select>
+
+    <input id="quantity" type="number" placeholder="Quantity" min="1" required>
+    <input id="price" type="number" placeholder="Price" min="0.01" step="0.01" required>
+
+    <button type="submit">Add</button>
+</form>
+
+<p id="error" style="color:red;"></p>
+
+<hr>
+
+<h2>Dashboard</h2>
+
+<div id="dashboard">
+    <div id="buyCard">
+        <h4>Total Buy</h4>
+        <p id="totalBuy">0</p>
+    </div>
+
+    <div id="sellCard">
+        <h4>Total Sell</h4>
+        <p id="totalSell">0</p>
+    </div>
+</div>
+
+<hr>
+
+<h3>Holdings</h3>
+<ul id="holdingsList"></ul>
+
+<h3>All Transactions</h3>
+<ul id="list"></ul>
+
+<script src="app.js"></script>
+</body>
+</html>
