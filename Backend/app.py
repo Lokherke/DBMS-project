@@ -143,7 +143,7 @@ def ensure_user_exists():
         conn.commit()
     conn.close()
 
-ensure_user_exists()
+#ensure_user_exists()
 
 
 
