@@ -1,59 +1,57 @@
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-import mysql.connector
-import os
+from db import get_db_connection
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
+app.secret_key = "supersecretkey"   # 🔐 REQUIRED for sessions
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, supports_credentials=True, origins=[
+    "https://dbms-project-3xgk.onrender.com",
+    "http://localhost:5500",
+    "http://127.0.0.1:5500"
+])
 
-
-# ---------------- DB CONNECTION ----------------
-def get_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME")
-    )
-
-# ---------------- AUTH ----------------
+# -------------------------------------------------
+# REGISTER
+# -------------------------------------------------
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.get_json()
-
     username = data.get("username")
     password = data.get("password")
 
     if not username or not password:
-        return jsonify({"error": "Missing fields"}), 400
+        return jsonify({"error": "Username and password required"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
     cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
     if cursor.fetchone():
-        return jsonify({"error": "Username already exists"}), 409
+        cursor.close()
+        conn.close()
+        return jsonify({"error": "Username already exists"}), 400
 
     hashed_pw = generate_password_hash(password)
+
     cursor.execute(
         "INSERT INTO users (username, password) VALUES (%s, %s)",
         (username, hashed_pw)
     )
     conn.commit()
-
     cursor.close()
     conn.close()
 
-    return jsonify({"message": "Registered successfully"}), 201
+    return jsonify({"message": "User registered successfully"}), 201
 
 
+# -------------------------------------------------
+# LOGIN
+# -------------------------------------------------
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
-
     username = data.get("username")
     password = data.get("password")
 
@@ -62,7 +60,6 @@ def login():
 
     cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
     user = cursor.fetchone()
-
     cursor.close()
     conn.close()
 
@@ -74,29 +71,44 @@ def login():
     return jsonify({"message": "Login successful"}), 200
 
 
+# -------------------------------------------------
+# LOGOUT
+# -------------------------------------------------
 @app.route("/api/logout", methods=["POST"])
 def logout():
     session.clear()
     return jsonify({"message": "Logged out"}), 200
 
 
-# ---------------- TRANSACTIONS ----------------
+# -------------------------------------------------
+# AUTH CHECK DECORATOR
+# -------------------------------------------------
+def login_required():
+    if "user_id" not in session:
+        return False
+    return True
+
+
+# -------------------------------------------------
+# ADD TRANSACTION
+# -------------------------------------------------
 @app.route("/api/transactions", methods=["POST"])
 def add_transaction():
-    if "user_id" not in session:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.get_json()
-
-    stock = data.get("stock_symbol")
-    t_type = data.get("transaction_type")
-    qty = int(data.get("quantity"))
-    price = float(data.get("price"))
+    data = request.json
     user_id = session["user_id"]
+
+    stock = data["stock_symbol"]
+    t_type = data["transaction_type"]
+    qty = int(data["quantity"])
+    price = float(data["price"])
 
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
+    # SELL validation
     if t_type == "SELL":
         cursor.execute("""
             SELECT COALESCE(SUM(
@@ -129,9 +141,12 @@ def add_transaction():
     return jsonify({"message": "Transaction added"}), 201
 
 
+# -------------------------------------------------
+# GET ALL TRANSACTIONS
+# -------------------------------------------------
 @app.route("/api/transactions", methods=["GET"])
 def get_transactions():
-    if "user_id" not in session:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
     user_id = session["user_id"]
@@ -152,10 +167,12 @@ def get_transactions():
     return jsonify(data)
 
 
-# ---------------- HOLDINGS ----------------
+# -------------------------------------------------
+# HOLDINGS
+# -------------------------------------------------
 @app.route("/api/holdings", methods=["GET"])
 def get_holdings():
-    if "user_id" not in session:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
     user_id = session["user_id"]
@@ -184,10 +201,12 @@ def get_holdings():
     return jsonify(data)
 
 
-# ---------------- SUMMARY ----------------
+# -------------------------------------------------
+# SUMMARY
+# -------------------------------------------------
 @app.route("/api/summary", methods=["GET"])
 def get_summary():
-    if "user_id" not in session:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
     user_id = session["user_id"]
@@ -212,12 +231,8 @@ def get_summary():
     return jsonify(data)
 
 
-# ---------------- ROOT ----------------
-@app.route("/", methods=["GET"])
-def home():
-    return "Backend is running 🚀", 200
-
-
-# ---------------- RUN SERVER ----------------
+# -------------------------------------------------
+# RUN SERVER
+# -------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=10000)
