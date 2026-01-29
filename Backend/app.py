@@ -5,8 +5,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
-# 🔐 REQUIRED for sessions
+# 🔐 REQUIRED for sessions (MUST be before routes)
 app.secret_key = "supersecretkey"
+
+# ✅ SESSION COOKIE SETTINGS FOR HTTPS + CROSS-ORIGIN
+app.config.update(
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True
+)
+
+# ✅ CORS CONFIG (ALLOW FRONTEND ORIGINS)
 CORS(app, supports_credentials=True, origins=[
     "https://tms.infinityfree.me",
     "https://dbms-project-3xgk.onrender.com",
@@ -83,12 +91,10 @@ def logout():
 
 
 # -------------------------------------------------
-# AUTH CHECK DECORATOR
+# AUTH CHECK
 # -------------------------------------------------
 def login_required():
-    if "user_id" not in session:
-        return False
-    return True
+    return "user_id" in session
 
 
 # -------------------------------------------------
@@ -234,7 +240,4 @@ def get_summary():
 
 
 # -------------------------------------------------
-# RUN SERVER
-# -------------------------------------------------
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# RUN
