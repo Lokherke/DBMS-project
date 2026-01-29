@@ -1,58 +1,58 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from db import get_db_connection
+import mysql.connector
+import os
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-CORS(app)
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
 
-# Simulated logged-in user (will improve later)
-user_id = 1
+CORS(app, supports_credentials=True)
 
+# ---------------- DB CONNECTION ----------------
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME")
+    )
 
-# -------------------------------------------------
-# REGISTER
-# -------------------------------------------------
+# ---------------- AUTH ----------------
 @app.route("/api/register", methods=["POST"])
 def register():
-    data = request.json
+    data = request.get_json()
+
     username = data.get("username")
     password = data.get("password")
 
     if not username or not password:
-        return jsonify({"error": "Username and password required"}), 400
-
-    hashed_password = generate_password_hash(password)
+        return jsonify({"error": "Missing fields"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # Check if user already exists
     cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
     if cursor.fetchone():
-        cursor.close()
-        conn.close()
-        return jsonify({"error": "Username already exists"}), 400
+        return jsonify({"error": "Username already exists"}), 409
 
-    # Insert user
+    hashed_pw = generate_password_hash(password)
     cursor.execute(
         "INSERT INTO users (username, password) VALUES (%s, %s)",
-        (username, hashed_password)
+        (username, hashed_pw)
     )
     conn.commit()
 
     cursor.close()
     conn.close()
 
-    return jsonify({"message": "User registered successfully"}), 201
+    return jsonify({"message": "Registered successfully"}), 201
 
 
-# -------------------------------------------------
-# LOGIN
-# -------------------------------------------------
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.json
+    data = request.get_json()
+
     username = data.get("username")
     password = data.get("password")
 
@@ -66,27 +66,36 @@ def login():
     conn.close()
 
     if not user or not check_password_hash(user["password"], password):
-        return jsonify({"error": "Invalid username or password"}), 401
+        return jsonify({"error": "Invalid credentials"}), 401
 
-    return jsonify({"message": "Login successful", "user_id": user["id"]}), 200
+    session["user_id"] = user["id"]
+
+    return jsonify({"message": "Login successful"}), 200
 
 
-# -------------------------------------------------
-# ADD TRANSACTION
-# -------------------------------------------------
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message": "Logged out"}), 200
+
+
+# ---------------- TRANSACTIONS ----------------
 @app.route("/api/transactions", methods=["POST"])
 def add_transaction():
-    data = request.json
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
 
-    stock = data["stock_symbol"]
-    t_type = data["transaction_type"]
-    qty = int(data["quantity"])
-    price = float(data["price"])
+    data = request.get_json()
+
+    stock = data.get("stock_symbol")
+    t_type = data.get("transaction_type")
+    qty = int(data.get("quantity"))
+    price = float(data.get("price"))
+    user_id = session["user_id"]
 
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # SELL validation
     if t_type == "SELL":
         cursor.execute("""
             SELECT COALESCE(SUM(
@@ -119,18 +128,21 @@ def add_transaction():
     return jsonify({"message": "Transaction added"}), 201
 
 
-# -------------------------------------------------
-# GET ALL TRANSACTIONS
-# -------------------------------------------------
 @app.route("/api/transactions", methods=["GET"])
 def get_transactions():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = session["user_id"]
+
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
     cursor.execute("""
         SELECT * FROM transactions
+        WHERE user_id = %s
         ORDER BY transaction_date DESC
-    """)
+    """, (user_id,))
 
     data = cursor.fetchall()
     cursor.close()
@@ -139,11 +151,14 @@ def get_transactions():
     return jsonify(data)
 
 
-# -------------------------------------------------
-# HOLDINGS
-# -------------------------------------------------
+# ---------------- HOLDINGS ----------------
 @app.route("/api/holdings", methods=["GET"])
 def get_holdings():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = session["user_id"]
+
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -168,11 +183,14 @@ def get_holdings():
     return jsonify(data)
 
 
-# -------------------------------------------------
-# SUMMARY
-# -------------------------------------------------
+# ---------------- SUMMARY ----------------
 @app.route("/api/summary", methods=["GET"])
 def get_summary():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = session["user_id"]
+
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -193,8 +211,12 @@ def get_summary():
     return jsonify(data)
 
 
-# -------------------------------------------------
-# RUN SERVER
-# -------------------------------------------------
+# ---------------- ROOT ----------------
+@app.route("/", methods=["GET"])
+def home():
+    return "Backend is running 🚀", 200
+
+
+# ---------------- RUN SERVER ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
