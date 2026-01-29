@@ -4,9 +4,11 @@ from db import get_db_connection
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"   # 🔐 REQUIRED for sessions
 
+# 🔐 REQUIRED for sessions
+app.secret_key = "supersecretkey"
 CORS(app, supports_credentials=True, origins=[
+    "https://tms.infinityfree.me",
     "https://dbms-project-3xgk.onrender.com",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
