@@ -1,13 +1,75 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from db import get_db_connection
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 CORS(app)
 
-# Simulated logged-in user
+# Simulated logged-in user (will improve later)
 user_id = 1
+
+
+# -------------------------------------------------
+# REGISTER
+# -------------------------------------------------
+@app.route("/api/register", methods=["POST"])
+def register():
+    data = request.json
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+
+    hashed_password = generate_password_hash(password)
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Check if user already exists
+    cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+    if cursor.fetchone():
+        cursor.close()
+        conn.close()
+        return jsonify({"error": "Username already exists"}), 400
+
+    # Insert user
+    cursor.execute(
+        "INSERT INTO users (username, password) VALUES (%s, %s)",
+        (username, hashed_password)
+    )
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return jsonify({"message": "User registered successfully"}), 201
+
+
+# -------------------------------------------------
+# LOGIN
+# -------------------------------------------------
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.json
+    username = data.get("username")
+    password = data.get("password")
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if not user or not check_password_hash(user["password"], password):
+        return jsonify({"error": "Invalid username or password"}), 401
+
+    return jsonify({"message": "Login successful", "user_id": user["id"]}), 200
+
 
 # -------------------------------------------------
 # ADD TRANSACTION
@@ -44,7 +106,6 @@ def add_transaction():
             conn.close()
             return jsonify({"error": "Not enough stock to sell"}), 400
 
-    # INSERT transaction (FIXED)
     cursor.execute("""
         INSERT INTO transactions
         (user_id, stock_symbol, transaction_type, quantity, price)
@@ -131,24 +192,9 @@ def get_summary():
 
     return jsonify(data)
 
-def ensure_user_exists():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-    if not cursor.fetchone():
-        cursor.execute(
-            "INSERT INTO users (id, username) VALUES (%s, %s)",
-            (user_id, "demo")
-        )
-        conn.commit()
-    conn.close()
-
-#ensure_user_exists()
-
-
 
 # -------------------------------------------------
 # RUN SERVER
 # -------------------------------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=10000)
