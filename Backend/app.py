@@ -7,7 +7,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
 
-CORS(app, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
 
 # ---------------- DB CONNECTION ----------------
 def get_db_connection():
