@@ -2,19 +2,17 @@ from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from db import get_db_connection
 from werkzeug.security import generate_password_hash, check_password_hash
+import os
 
 app = Flask(__name__)
 
-# 🔐 REQUIRED for sessions (MUST be before routes)
-app.secret_key = "supersecretkey"
-
-# ✅ SESSION COOKIE SETTINGS FOR HTTPS + CROSS-ORIGIN
+# 🔐 Required for sessions
+app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=True
 )
 
-# ✅ CORS CONFIG (ALLOW FRONTEND ORIGINS)
 CORS(app, supports_credentials=True, origins=[
     "https://tms.infinityfree.me",
     "https://dbms-project-3xgk.onrender.com",
@@ -28,6 +26,9 @@ CORS(app, supports_credentials=True, origins=[
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data received"}), 400
+
     username = data.get("username")
     password = data.get("password")
 
@@ -62,6 +63,9 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data received"}), 400
+
     username = data.get("username")
     password = data.get("password")
 
@@ -105,13 +109,13 @@ def add_transaction():
     if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.json
+    data = request.get_json()
     user_id = session["user_id"]
 
-    stock = data["stock_symbol"]
-    t_type = data["transaction_type"]
-    qty = int(data["quantity"])
-    price = float(data["price"])
+    stock = data.get("stock_symbol")
+    t_type = data.get("transaction_type")
+    qty = int(data.get("quantity"))
+    price = float(data.get("price"))
 
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -240,4 +244,8 @@ def get_summary():
 
 
 # -------------------------------------------------
-# RUN
+# RUN SERVER (Render compatible)
+# -------------------------------------------------
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
