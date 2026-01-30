@@ -112,7 +112,7 @@ def logout():
 def login_required():
     return "user_id" in session
 
-# ---------------- TRANSACTIONS ----------------
+# ---------------- ADD TRANSACTION ----------------
 @app.route("/api/transactions", methods=["POST"])
 def add_transaction():
     if not login_required():
@@ -153,4 +153,116 @@ def add_transaction():
             INSERT INTO transactions
             (user_id, stock_symbol, transaction_type, quantity, price)
             VALUES (%s, %s, %s, %s, %s)
-        """, (us
+        """, (user_id, stock, t_type, qty, price))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"message": "Transaction added"}), 201
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Server error", "details": str(e)}), 500
+
+# ---------------- GET TRANSACTIONS ----------------
+@app.route("/api/transactions", methods=["GET"])
+def get_transactions():
+    if not login_required():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        user_id = session["user_id"]
+
+        conn = safe_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE user_id = %s
+            ORDER BY transaction_date DESC
+        """, (user_id,))
+
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return jsonify(data)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Server error", "details": str(e)}), 500
+
+# ---------------- HOLDINGS ----------------
+@app.route("/api/holdings", methods=["GET"])
+def get_holdings():
+    if not login_required():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        user_id = session["user_id"]
+
+        conn = safe_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT stock_symbol,
+                   SUM(
+                       CASE
+                           WHEN transaction_type = 'BUY' THEN quantity
+                           WHEN transaction_type = 'SELL' THEN -quantity
+                       END
+                   ) AS net_quantity
+            FROM transactions
+            WHERE user_id = %s
+            GROUP BY stock_symbol
+            HAVING net_quantity > 0
+        """, (user_id,))
+
+        data = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return jsonify(data)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Server error", "details": str(e)}), 500
+
+# ---------------- SUMMARY ----------------
+@app.route("/api/summary", methods=["GET"])
+def get_summary():
+    if not login_required():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        user_id = session["user_id"]
+
+        conn = safe_db()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                SUM(CASE WHEN transaction_type = 'BUY'
+                         THEN quantity * price ELSE 0 END) AS total_buy,
+                SUM(CASE WHEN transaction_type = 'SELL'
+                         THEN quantity * price ELSE 0 END) AS total_sell
+            FROM transactions
+            WHERE user_id = %s
+        """, (user_id,))
+
+        data = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        return jsonify(data)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "Server error", "details": str(e)}), 500
+
+# ---------------- RUN ----------------
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    print("🚀 Starting server on port", port)
+    app.run(host="0.0.0.0", port=port)
