@@ -1,229 +1,243 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
-import os
-import traceback
-import jwt
-import datetime
 from db import get_db_connection
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-CORS(app, origins=[
+# 🔐 REQUIRED for sessions (MUST be before routes)
+app.secret_key = "supersecretkey"
+
+# ✅ SESSION COOKIE SETTINGS FOR HTTPS + CROSS-ORIGIN
+app.config.update(
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True
+)
+
+# ✅ CORS CONFIG (ALLOW FRONTEND ORIGINS)
+CORS(app, supports_credentials=True, origins=[
     "https://tms.infinityfree.me",
+    "https://dbms-project-3xgk.onrender.com",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
 ])
 
-JWT_SECRET = os.getenv("JWT_SECRET", "jwtsecret123")
-
-@app.route("/")
-def home():
-    return "Backend is running!"
-
-def generate_token(user_id):
-    payload = {
-        "user_id": user_id,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-
-def verify_token(request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        return None
-    try:
-        token = auth_header.split(" ")[1]
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        return payload["user_id"]
-    except:
-        return None
-
-# ---------------- REGISTER ----------------
+# -------------------------------------------------
+# REGISTER
+# -------------------------------------------------
 @app.route("/api/register", methods=["POST"])
 def register():
-    try:
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
 
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
 
-        cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
-        if cursor.fetchone():
-            return jsonify({"error": "Username already exists"}), 400
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
 
-        hashed_pw = generate_password_hash(password)
-        cursor.execute(
-            "INSERT INTO users (username, password) VALUES (%s, %s)",
-            (username, hashed_pw)
-        )
-        conn.commit()
+    cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+    if cursor.fetchone():
         cursor.close()
         conn.close()
+        return jsonify({"error": "Username already exists"}), 400
 
-        return jsonify({"message": "User registered successfully"}), 201
+    hashed_pw = generate_password_hash(password)
 
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+    cursor.execute(
+        "INSERT INTO users (username, password) VALUES (%s, %s)",
+        (username, hashed_pw)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-# ---------------- LOGIN ----------------
+    return jsonify({"message": "User registered successfully"}), 201
+
+
+# -------------------------------------------------
+# LOGIN
+# -------------------------------------------------
 @app.route("/api/login", methods=["POST"])
 def login():
-    try:
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
 
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-        user = cursor.fetchone()
-        cursor.close()
-        conn.close()
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
 
-        if not user or not check_password_hash(user["password"], password):
-            return jsonify({"error": "Invalid credentials"}), 401
+    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
 
-        token = generate_token(user["id"])
-        return jsonify({"token": token, "username": user["username"]}), 200
+    if not user or not check_password_hash(user["password"], password):
+        return jsonify({"error": "Invalid credentials"}), 401
 
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+    session["user_id"] = user["id"]
 
-# ---------------- ADD TRANSACTION ----------------
+    return jsonify({"message": "Login successful"}), 200
+
+
+# -------------------------------------------------
+# LOGOUT
+# -------------------------------------------------
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message": "Logged out"}), 200
+
+
+# -------------------------------------------------
+# AUTH CHECK
+# -------------------------------------------------
+def login_required():
+    return "user_id" in session
+
+
+# -------------------------------------------------
+# ADD TRANSACTION
+# -------------------------------------------------
 @app.route("/api/transactions", methods=["POST"])
 def add_transaction():
-    user_id = verify_token(request)
-    if not user_id:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    try:
-        data = request.get_json()
-        stock = data.get("stock_symbol")
-        t_type = data.get("transaction_type")
-        qty = int(data.get("quantity"))
-        price = float(data.get("price"))
+    data = request.json
+    user_id = session["user_id"]
 
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
+    stock = data["stock_symbol"]
+    t_type = data["transaction_type"]
+    qty = int(data["quantity"])
+    price = float(data["price"])
 
-        if t_type == "SELL":
-            cursor.execute("""
-                SELECT COALESCE(SUM(
-                    CASE
-                        WHEN transaction_type = 'BUY' THEN quantity
-                        WHEN transaction_type = 'SELL' THEN -quantity
-                    END
-                ), 0) AS holding
-                FROM transactions
-                WHERE stock_symbol = %s AND user_id = %s
-            """, (stock, user_id))
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
 
-            holding = cursor.fetchone()["holding"]
-            if qty > holding:
-                return jsonify({"error": "Not enough stock to sell"}), 400
-
+    # SELL validation
+    if t_type == "SELL":
         cursor.execute("""
-            INSERT INTO transactions
-            (user_id, stock_symbol, transaction_type, quantity, price)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (user_id, stock, t_type, qty, price))
-        conn.commit()
-        cursor.close()
-        conn.close()
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN transaction_type = 'BUY' THEN quantity
+                    WHEN transaction_type = 'SELL' THEN -quantity
+                END
+            ), 0) AS holding
+            FROM transactions
+            WHERE stock_symbol = %s AND user_id = %s
+        """, (stock, user_id))
 
-        return jsonify({"message": "Transaction added"}), 201
+        holding = cursor.fetchone()["holding"]
 
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+        if qty > holding:
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "Not enough stock to sell"}), 400
 
-# ---------------- GET TRANSACTIONS ----------------
+    cursor.execute("""
+        INSERT INTO transactions
+        (user_id, stock_symbol, transaction_type, quantity, price)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (user_id, stock, t_type, qty, price))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({"message": "Transaction added"}), 201
+
+
+# -------------------------------------------------
+# GET ALL TRANSACTIONS
+# -------------------------------------------------
 @app.route("/api/transactions", methods=["GET"])
 def get_transactions():
-    user_id = verify_token(request)
-    if not user_id:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT * FROM transactions
-            WHERE user_id = %s
-            ORDER BY transaction_date DESC
-        """, (user_id,))
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify(data)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+    user_id = session["user_id"]
 
-# ---------------- HOLDINGS ----------------
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT * FROM transactions
+        WHERE user_id = %s
+        ORDER BY transaction_date DESC
+    """, (user_id,))
+
+    data = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return jsonify(data)
+
+
+# -------------------------------------------------
+# HOLDINGS
+# -------------------------------------------------
 @app.route("/api/holdings", methods=["GET"])
 def get_holdings():
-    user_id = verify_token(request)
-    if not user_id:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT stock_symbol,
-                   SUM(
-                       CASE
-                           WHEN transaction_type = 'BUY' THEN quantity
-                           WHEN transaction_type = 'SELL' THEN -quantity
-                       END
-                   ) AS net_quantity
-            FROM transactions
-            WHERE user_id = %s
-            GROUP BY stock_symbol
-            HAVING net_quantity > 0
-        """, (user_id,))
-        data = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify(data)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+    user_id = session["user_id"]
 
-# ---------------- SUMMARY ----------------
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT stock_symbol,
+               SUM(
+                   CASE
+                       WHEN transaction_type = 'BUY' THEN quantity
+                       WHEN transaction_type = 'SELL' THEN -quantity
+                   END
+               ) AS net_quantity
+        FROM transactions
+        WHERE user_id = %s
+        GROUP BY stock_symbol
+        HAVING net_quantity > 0
+    """, (user_id,))
+
+    data = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return jsonify(data)
+
+
+# -------------------------------------------------
+# SUMMARY
+# -------------------------------------------------
 @app.route("/api/summary", methods=["GET"])
 def get_summary():
-    user_id = verify_token(request)
-    if not user_id:
+    if not login_required():
         return jsonify({"error": "Unauthorized"}), 401
 
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT
-                SUM(CASE WHEN transaction_type = 'BUY'
-                         THEN quantity * price ELSE 0 END) AS total_buy,
-                SUM(CASE WHEN transaction_type = 'SELL'
-                         THEN quantity * price ELSE 0 END) AS total_sell
-            FROM transactions
-            WHERE user_id = %s
-        """, (user_id,))
-        data = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return jsonify(data)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": "Server error"}), 500
+    user_id = session["user_id"]
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT
+            SUM(CASE WHEN transaction_type = 'BUY'
+                     THEN quantity * price ELSE 0 END) AS total_buy,
+            SUM(CASE WHEN transaction_type = 'SELL'
+                     THEN quantity * price ELSE 0 END) AS total_sell
+        FROM transactions
+        WHERE user_id = %s
+    """, (user_id,))
+
+    data = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    return jsonify(data)
+
+
+# -------------------------------------------------
+# RUN
