@@ -222,4 +222,8 @@ def get_summary():
         return jsonify(data)
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error"
+        return jsonify({"error": "Server error"}), 500
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
