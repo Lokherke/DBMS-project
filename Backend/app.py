@@ -41,6 +41,14 @@ def get_db_connection():
 
 
 # -------------------------------------------------
+# HEALTH CHECK ROUTE
+# -------------------------------------------------
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
+# -------------------------------------------------
 # TOKEN REQUIRED DECORATOR
 # -------------------------------------------------
 def token_required(f):
