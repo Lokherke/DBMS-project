@@ -1,27 +1,50 @@
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from db import get_db_connection
-import os
 from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
+import datetime
+import os
+from functools import wraps
 
 app = Flask(__name__)
 
-# 🔐 REQUIRED for sessions (MUST be before routes)
-app.secret_key = "supersecretkey"
-
-# ✅ SESSION COOKIE SETTINGS FOR HTTPS + CROSS-ORIGIN
-app.config.update(
-    SESSION_COOKIE_SAMESITE="None",
-    SESSION_COOKIE_SECURE=True
-)
+# 🔐 SECRET KEY
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
 
 # ✅ CORS CONFIG (ALLOW FRONTEND ORIGINS)
-CORS(app, supports_credentials=True, origins=[
+CORS(app, supports_credentials=False, origins=[
     "https://tms.infinityfree.me",
-    "https://dbms-project-3xgk.onrender.com",
     "http://localhost:5500",
     "http://127.0.0.1:5500"
 ])
+
+# -------------------------------------------------
+# TOKEN REQUIRED DECORATOR
+# -------------------------------------------------
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+
+        if "Authorization" in request.headers:
+            token = request.headers["Authorization"].split(" ")[1]
+
+        if not token:
+            return jsonify({"error": "Token is missing"}), 401
+
+        try:
+            data = jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
+            current_user_id = data["user_id"]
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
+
+        return f(current_user_id, *args, **kwargs)
+
+    return decorated
+
 
 # -------------------------------------------------
 # REGISTER
@@ -77,37 +100,25 @@ def login():
     if not user or not check_password_hash(user["password"], password):
         return jsonify({"error": "Invalid credentials"}), 401
 
-    session["user_id"] = user["id"]
+    token = jwt.encode({
+        "user_id": user["id"],
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, app.config["SECRET_KEY"], algorithm="HS256")
 
-    return jsonify({"message": "Login successful"}), 200
-
-
-# -------------------------------------------------
-# LOGOUT
-# -------------------------------------------------
-@app.route("/api/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"message": "Logged out"}), 200
-
-
-# -------------------------------------------------
-# AUTH CHECK
-# -------------------------------------------------
-def login_required():
-    return "user_id" in session
+    return jsonify({
+        "message": "Login successful",
+        "token": token,
+        "username": user["username"]
+    }), 200
 
 
 # -------------------------------------------------
 # ADD TRANSACTION
 # -------------------------------------------------
 @app.route("/api/transactions", methods=["POST"])
-def add_transaction():
-    if not login_required():
-        return jsonify({"error": "Unauthorized"}), 401
-
+@token_required
+def add_transaction(current_user_id):
     data = request.json
-    user_id = session["user_id"]
 
     stock = data["stock_symbol"]
     t_type = data["transaction_type"]
@@ -128,7 +139,7 @@ def add_transaction():
             ), 0) AS holding
             FROM transactions
             WHERE stock_symbol = %s AND user_id = %s
-        """, (stock, user_id))
+        """, (stock, current_user_id))
 
         holding = cursor.fetchone()["holding"]
 
@@ -141,7 +152,7 @@ def add_transaction():
         INSERT INTO transactions
         (user_id, stock_symbol, transaction_type, quantity, price)
         VALUES (%s, %s, %s, %s, %s)
-    """, (user_id, stock, t_type, qty, price))
+    """, (current_user_id, stock, t_type, qty, price))
 
     conn.commit()
     cursor.close()
@@ -154,12 +165,8 @@ def add_transaction():
 # GET ALL TRANSACTIONS
 # -------------------------------------------------
 @app.route("/api/transactions", methods=["GET"])
-def get_transactions():
-    if not login_required():
-        return jsonify({"error": "Unauthorized"}), 401
-
-    user_id = session["user_id"]
-
+@token_required
+def get_transactions(current_user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -167,7 +174,7 @@ def get_transactions():
         SELECT * FROM transactions
         WHERE user_id = %s
         ORDER BY transaction_date DESC
-    """, (user_id,))
+    """, (current_user_id,))
 
     data = cursor.fetchall()
     cursor.close()
@@ -180,12 +187,8 @@ def get_transactions():
 # HOLDINGS
 # -------------------------------------------------
 @app.route("/api/holdings", methods=["GET"])
-def get_holdings():
-    if not login_required():
-        return jsonify({"error": "Unauthorized"}), 401
-
-    user_id = session["user_id"]
-
+@token_required
+def get_holdings(current_user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -201,7 +204,7 @@ def get_holdings():
         WHERE user_id = %s
         GROUP BY stock_symbol
         HAVING net_quantity > 0
-    """, (user_id,))
+    """, (current_user_id,))
 
     data = cursor.fetchall()
     cursor.close()
@@ -214,12 +217,8 @@ def get_holdings():
 # SUMMARY
 # -------------------------------------------------
 @app.route("/api/summary", methods=["GET"])
-def get_summary():
-    if not login_required():
-        return jsonify({"error": "Unauthorized"}), 401
-
-    user_id = session["user_id"]
-
+@token_required
+def get_summary(current_user_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -231,7 +230,7 @@ def get_summary():
                      THEN quantity * price ELSE 0 END) AS total_sell
         FROM transactions
         WHERE user_id = %s
-    """, (user_id,))
+    """, (current_user_id,))
 
     data = cursor.fetchone()
     cursor.close()
@@ -246,5 +245,3 @@ def get_summary():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
