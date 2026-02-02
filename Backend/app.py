@@ -9,17 +9,23 @@ from functools import wraps
 import mysql.connector
 import os
 
+
 app = Flask(__name__)
 
 # 🔐 SECRET KEY
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "supersecretkey")
+app.secret_key = os.environ.get("SECRET_KEY", "supersecretkey")
 
-# ✅ CORS CONFIG (ALLOW FRONTEND ORIGINS)
-CORS(app, supports_credentials=False, origins=[
-    "https://tms.infinityfree.me",
-    "http://localhost:5500",
-    "http://127.0.0.1:5500"
-])
+# ✅ SESSION COOKIE SETTINGS
+app.config.update(
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=True
+)
+
+# ✅ CORS — THIS IS THE FIX
+CORS(app,
+     supports_credentials=True,
+     origins=["https://tms.infinityfree.me"]
+)
 
 
 def get_db_connection():
